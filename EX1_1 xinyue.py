@@ -1,100 +1,138 @@
-import torch
-
-
 class LQR:
 
-    def __init__(self, H, M, C, D, R, sigma, T, device="cpu"):
+    # =====================================================
+    # (i) Initialise the class with LQR model parameters
+    # =====================================================
+    def __init__(self, H, M, C, D, R, sigma, T):
 
-        self.device = device
-
-        # 转成 torch tensor
-        self.H = torch.tensor(H, dtype=torch.float32, device=device)
-        self.M = torch.tensor(M, dtype=torch.float32, device=device)
-        self.C = torch.tensor(C, dtype=torch.float32, device=device)
-        self.D = torch.tensor(D, dtype=torch.float32, device=device)
-        self.R = torch.tensor(R, dtype=torch.float32, device=device)
-        self.sigma = torch.tensor(sigma, dtype=torch.float32, device=device)
-
+        self.H = H.float()
+        self.M = M.float()
+        self.C = C.float()
+        self.D = D.float()
+        self.R = R.float()
+        self.sigma = sigma.float()
         self.T = T
 
+        # Precompute D^{-1}
         self.Dinv = torch.linalg.inv(self.D)
 
 
-    # -----------------------------------------------------
-    # Riccati ODE (Euler backward for simplicity)
-    # -----------------------------------------------------
-    def solve_riccati(self, time_grid):
+    # =====================================================
+    # (ii) Solve the Riccati ODE on a given time grid
+    # =====================================================
+    def solve_riccati(self, t_grid):
 
-        time_grid = torch.tensor(time_grid, dtype=torch.float32, device=self.device)
+        if not torch.is_tensor(t_grid):
+            t_grid = torch.tensor(t_grid, dtype=torch.float32)
+        else:
+            t_grid = t_grid.float()
 
-        N = len(time_grid)
-        dt = time_grid[1] - time_grid[0]
+        N = len(t_grid)
+        dt = t_grid[1] - t_grid[0]
 
-        S = torch.zeros((N, 2, 2), device=self.device)
-        S[-1] = self.R   # terminal condition
+        # Store S(t)
+        S = torch.zeros(N, 2, 2, dtype=torch.float32)
+        S[-1] = self.R   # Terminal condition: S(T) = R
 
-        # backward iteration
+        # Backward Euler scheme for Riccati ODE
         for i in reversed(range(N - 1)):
+
             S_next = S[i + 1]
 
-            dS = (
+            drift = (
                 -2 * self.H.T @ S_next
                 + S_next @ self.M @ self.Dinv @ self.M.T @ S_next
                 - self.C
             )
 
-            S[i] = S_next - dt * dS   # backward Euler
+            S[i] = S_next - dt * drift
 
-        self.time_grid = time_grid
-        self.S_grid = S
+        self.S = S
+        self.t_grid = t_grid
+
+        # Compute g(t) = ∫_t^T tr(σσ^T S(r)) dr
+        sigma_sigma_T = self.sigma @ self.sigma.T
+        trace_vals = torch.stack([
+            torch.trace(sigma_sigma_T @ S_i) for S_i in self.S
+        ])
+
+        g = torch.zeros(N, dtype=torch.float32)
+        for i in range(N - 2, -1, -1):
+            g[i] = g[i + 1] + 0.5 * (trace_vals[i] + trace_vals[i + 1]) * dt
+
+        self.g = g
 
 
-    # -----------------------------------------------------
-    # 插值 S(t) （简单 nearest + index）
-    # -----------------------------------------------------
+    # =====================================================
+    # Helper function: retrieve S(t) for given t
+    # =====================================================
     def get_S(self, t):
 
-        # t: (batch,)
-        idx = torch.bucketize(t, self.time_grid) - 1
-        idx = torch.clamp(idx, 0, len(self.time_grid) - 1)
+        if t.dim() == 0:
+            idx = torch.argmin(torch.abs(self.t_grid - t))
+            return self.S[idx]
 
-        return self.S_grid[idx]   # (batch,2,2)
-
-
-    # -----------------------------------------------------
-    # Value function
-    # 输入:
-    # t: (batch,)
-    # x: (batch,1,2)
-    # 输出:
-    # (batch,1)
-    # -----------------------------------------------------
-    def value(self, t, x):
-
-        S = self.get_S(t)   # (batch,2,2)
-
-        xT = x.transpose(1, 2)   # (batch,2,1)
-
-        val = torch.bmm(torch.bmm(x, S), xT)  # (batch,1,1)
-
-        return val.squeeze(-1)   # (batch,1)
+        diff = torch.abs(self.t_grid.unsqueeze(1) - t.unsqueeze(0))
+        idx = torch.argmin(diff, dim=0)
+        return self.S[idx]
 
 
-    # -----------------------------------------------------
-    # Optimal control
-    # 输出:
-    # (batch,2)
-    # -----------------------------------------------------
-    def control(self, t, x):
+    # =====================================================
+    # Helper function: retrieve g(t) for given t
+    # =====================================================
+    def get_g(self, t):
 
-        S = self.get_S(t)   # (batch,2,2)
+        if t.dim() == 0:
+            idx = torch.argmin(torch.abs(self.t_grid - t))
+            return self.g[idx]
 
-        xT = x.transpose(1, 2)   # (batch,2,1)
+        diff = torch.abs(self.t_grid.unsqueeze(1) - t.unsqueeze(0))
+        idx = torch.argmin(diff, dim=0)
+        return self.g[idx]
 
-        # (batch,2,1)
-        u = - torch.bmm(
-            self.Dinv @ self.M.T @ S,
-            xT
-        )
 
-        return u.squeeze(-1)   # (batch,2)
+    # =====================================================
+    # (iii) Compute the value function v(t, x)
+    # Input:
+    #   t: (batch,)
+    #   x: (batch, 1, 2)
+    # Output:
+    #   (batch, 1)
+    # =====================================================
+    def value_function(self, t, x):
+
+        S = self.get_S(t)              # (batch, 2, 2)
+        g = self.get_g(t)              # (batch,)
+
+        xT = x.transpose(1, 2)         # (batch, 2, 1)
+
+        value = torch.bmm(torch.bmm(x, S), xT)   # (batch, 1, 1)
+        value = value.squeeze(-1)                # (batch, 1)
+
+        return value + g.unsqueeze(1)
+
+
+    # =====================================================
+    # (iv) Compute the optimal control a(t, x)
+    # Input:
+    #   t: (batch,)
+    #   X: (batch, 1, 2)
+    # Output:
+    #   (batch, 2)
+    # =====================================================
+    def optimal_control(self, t, X):
+
+        S = self.get_S(t)
+
+        # Single sample case: X shape = (2,)
+        if X.dim() == 1:
+            return -(self.Dinv @ self.M.T @ S @ X)
+
+        # Batch case
+        xT = X.transpose(1, 2)   # (batch, 2, 1)
+
+        A = (self.Dinv @ self.M.T).unsqueeze(0).expand(S.size(0), -1, -1)
+        SX = torch.bmm(S, xT)
+        u = -torch.bmm(A, SX)
+
+        return u.squeeze(-1)     # (batch, 2)
