@@ -197,8 +197,12 @@ The final implementation demonstrates that:
 
 ## 9. References
 
-- Deep-PDE-Solvers:  
-  https://github.com/msabvid/Deep-PDE-Solvers
+- M. Sabate-Vidales, Deep-PDE-Solvers, Github project,
+  https://github.com/msabvid/Deep-PDE-Solvers,2021
 
-- Deep Galerkin Method:  
-  https://github.com/EurasianEagleOwl/DeepGalerkinMethod
+- C. Jiang, Deep Galerkin Method, Github project,
+  https://github.com/EurasianEagleOwl/DeepGalerkinMethod,2022
+
+- G. dos Reis, J. Li, and D. Siska.
+  Stochastic Control and Dynamic Asset Allocation lecture notes, 2026.
+
