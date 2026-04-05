@@ -9,10 +9,6 @@
 - Name 2: Liyi Li (Student ID: s2905691)  
 - Name 3: Xinyue Zhao (Student ID: s2846397)  
 
-Contribution:
-- Default equal contribution (1/3 each)  
-*(Modify if needed)*
-
 ---
 
 ## 2. Overview
