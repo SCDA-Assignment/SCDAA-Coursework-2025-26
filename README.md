@@ -10,7 +10,7 @@
 - Name 3: Xinyue Zhao (Student ID: s2846397)  
 
 Contribution:
-- Default equal contribution (1/3 each)  
+- Equal contribution (1/3 each)  
 
 ---
 
